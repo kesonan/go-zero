@@ -43,7 +43,7 @@ func AddProbe(probe Probe) {
 	defaultHealthManager.addProbe(probe)
 }
 
-// CreateHttpHandler create health http handler base on given probe.
+// CreateHttpHandler creates a health http handler based on the given probe.
 func CreateHttpHandler(healthResponse string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if defaultHealthManager.IsReady() {
@@ -110,6 +110,10 @@ func (p *comboHealthManager) MarkNotReady() {
 func (p *comboHealthManager) IsReady() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if len(p.probes) == 0 {
+		return false
+	}
 
 	for _, probe := range p.probes {
 		if !probe.IsReady() {

@@ -2,13 +2,14 @@ package httpx
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
 
+	"github.com/zeromicro/go-zero/core/jsonx"
+	"github.com/zeromicro/go-zero/core/logc"
 	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/rest/internal/errcode"
 	"github.com/zeromicro/go-zero/rest/internal/header"
@@ -119,7 +120,7 @@ func WriteJson(w http.ResponseWriter, code int, v any) {
 // WriteJsonCtx writes v as json string into w with code.
 func WriteJsonCtx(ctx context.Context, w http.ResponseWriter, code int, v any) {
 	if err := doWriteJson(w, code, v); err != nil {
-		logx.WithContext(ctx).Error(err)
+		logc.Error(ctx, err)
 	}
 }
 
@@ -172,13 +173,13 @@ func doHandleError(w http.ResponseWriter, err error, handler func(error) (int, a
 }
 
 func doWriteJson(w http.ResponseWriter, code int, v any) error {
-	bs, err := json.Marshal(v)
+	bs, err := jsonx.Marshal(v)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return fmt.Errorf("marshal json failed, error: %w", err)
 	}
 
-	w.Header().Set(ContentType, header.JsonContentType)
+	w.Header().Set(ContentType, header.ContentTypeJson)
 	w.WriteHeader(code)
 
 	if n, err := w.Write(bs); err != nil {

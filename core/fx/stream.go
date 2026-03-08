@@ -84,10 +84,10 @@ func Range(source <-chan any) Stream {
 	}
 }
 
-// AllMach returns whether all elements of this stream match the provided predicate.
+// AllMatch returns whether all elements of this stream match the provided predicate.
 // May not evaluate the predicate on all elements if not necessary for determining the result.
 // If the stream is empty then true is returned and the predicate is not evaluated.
-func (s Stream) AllMach(predicate func(item any) bool) bool {
+func (s Stream) AllMatch(predicate func(item any) bool) bool {
 	for item := range s.source {
 		if !predicate(item) {
 			// make sure the former goroutine not block, and current func returns fast.
@@ -99,10 +99,10 @@ func (s Stream) AllMach(predicate func(item any) bool) bool {
 	return true
 }
 
-// AnyMach returns whether any elements of this stream match the provided predicate.
+// AnyMatch returns whether any elements of this stream match the provided predicate.
 // May not evaluate the predicate on all elements if not necessary for determining the result.
 // If the stream is empty then false is returned and the predicate is not evaluated.
-func (s Stream) AnyMach(predicate func(item any) bool) bool {
+func (s Stream) AnyMatch(predicate func(item any) bool) bool {
 	for item := range s.source {
 		if predicate(item) {
 			// make sure the former goroutine not block, and current func returns fast.
@@ -168,7 +168,7 @@ func (s Stream) Count() (count int) {
 	return
 }
 
-// Distinct removes the duplicated items base on the given KeyFunc.
+// Distinct removes the duplicated items based on the given KeyFunc.
 func (s Stream) Distinct(fn KeyFunc) Stream {
 	source := make(chan any)
 
@@ -459,7 +459,7 @@ func (s Stream) Tail(n int64) Stream {
 	return Range(source)
 }
 
-// Walk lets the callers handle each item, the caller may write zero, one or more items base on the given item.
+// Walk lets the callers handle each item, the caller may write zero, one or more items based on the given item.
 func (s Stream) Walk(fn WalkFunc, opts ...Option) Stream {
 	option := buildOptions(opts...)
 	if option.unlimitedWorkers {

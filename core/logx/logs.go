@@ -10,7 +10,6 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/zeromicro/go-zero/core/sysx"
 )
@@ -52,6 +51,26 @@ type (
 	}
 )
 
+// AddWriter adds a new writer.
+// If there is already a writer, the new writer will be added to the writer chain.
+// For example, to write logs to both file and console, if there is already a file writer,
+// ```go
+// logx.AddWriter(logx.NewWriter(os.Stdout))
+// ```
+func AddWriter(w Writer) {
+	ow := Reset()
+	if ow == nil {
+		SetWriter(w)
+	} else {
+		// no need to check if the existing writer is a comboWriter,
+		// because it is not common to add more than one writer.
+		// even more than one writer, the behavior is the same.
+		SetWriter(comboWriter{
+			writers: []Writer{ow, w},
+		})
+	}
+}
+
 // Alert alerts v in alert level, and the message is written to error log.
 func Alert(v string) {
 	getWriter().Alert(v)
@@ -77,6 +96,14 @@ func Debug(v ...any) {
 func Debugf(format string, v ...any) {
 	if shallLog(DebugLevel) {
 		writeDebug(fmt.Sprintf(format, v...))
+	}
+}
+
+// Debugfn writes function result into access log if debug level enabled.
+// This is useful when the function is expensive to call and debug level disabled.
+func Debugfn(fn func() any) {
+	if shallLog(DebugLevel) {
+		writeDebug(fn())
 	}
 }
 
@@ -119,6 +146,13 @@ func Errorf(format string, v ...any) {
 	}
 }
 
+// Errorfn writes function result into error log.
+func Errorfn(fn func() any) {
+	if shallLog(ErrorLevel) {
+		writeError(fn())
+	}
+}
+
 // ErrorStack writes v along with call stack into error log.
 func ErrorStack(v ...any) {
 	if shallLog(ErrorLevel) {
@@ -152,39 +186,9 @@ func Errorw(msg string, fields ...LogField) {
 
 // Field returns a LogField for the given key and value.
 func Field(key string, value any) LogField {
-	switch val := value.(type) {
-	case error:
-		return LogField{Key: key, Value: encodeError(val)}
-	case []error:
-		var errs []string
-		for _, err := range val {
-			errs = append(errs, encodeError(err))
-		}
-		return LogField{Key: key, Value: errs}
-	case time.Duration:
-		return LogField{Key: key, Value: fmt.Sprint(val)}
-	case []time.Duration:
-		var durs []string
-		for _, dur := range val {
-			durs = append(durs, fmt.Sprint(dur))
-		}
-		return LogField{Key: key, Value: durs}
-	case []time.Time:
-		var times []string
-		for _, t := range val {
-			times = append(times, fmt.Sprint(t))
-		}
-		return LogField{Key: key, Value: times}
-	case fmt.Stringer:
-		return LogField{Key: key, Value: encodeStringer(val)}
-	case []fmt.Stringer:
-		var strs []string
-		for _, str := range val {
-			strs = append(strs, encodeStringer(str))
-		}
-		return LogField{Key: key, Value: strs}
-	default:
-		return LogField{Key: key, Value: val}
+	return LogField{
+		Key:   key,
+		Value: value,
 	}
 }
 
@@ -199,6 +203,14 @@ func Info(v ...any) {
 func Infof(format string, v ...any) {
 	if shallLog(InfoLevel) {
 		writeInfo(fmt.Sprintf(format, v...))
+	}
+}
+
+// Infofn writes function result into access log.
+// This is useful when the function is expensive to call and info level disabled.
+func Infofn(fn func() any) {
+	if shallLog(InfoLevel) {
+		writeInfo(fn())
 	}
 }
 
@@ -264,7 +276,8 @@ func SetUp(c LogConf) (err error) {
 	// Because multiple services in one process might call SetUp respectively.
 	// Need to wait for the first caller to complete the execution.
 	setupOnce.Do(func() {
-		setupLogLevel(c)
+		setupLogLevel(c.Level)
+		setupFieldKeys(c.FieldKeys)
 
 		if !c.Stat {
 			DisableStat()
@@ -272,6 +285,10 @@ func SetUp(c LogConf) (err error) {
 
 		if len(c.TimeFormat) > 0 {
 			timeFormat = c.TimeFormat
+		}
+
+		if len(c.FileTimeFormat) > 0 {
+			fileTimeFormat = c.FileTimeFormat
 		}
 
 		atomic.StoreUint32(&maxContentLength, c.MaxContentLength)
@@ -321,6 +338,14 @@ func Slow(v ...any) {
 func Slowf(format string, v ...any) {
 	if shallLog(ErrorLevel) {
 		writeSlow(fmt.Sprintf(format, v...))
+	}
+}
+
+// Slowfn writes function result into slow log.
+// This is useful when the function is expensive to call and slow level disabled.
+func Slowfn(fn func() any) {
+	if shallLog(ErrorLevel) {
+		writeSlow(fn())
 	}
 }
 
@@ -456,8 +481,35 @@ func handleOptions(opts []LogOption) {
 	}
 }
 
-func setupLogLevel(c LogConf) {
-	switch c.Level {
+func setupFieldKeys(c fieldKeyConf) {
+	if len(c.CallerKey) > 0 {
+		callerKey = c.CallerKey
+	}
+	if len(c.ContentKey) > 0 {
+		contentKey = c.ContentKey
+	}
+	if len(c.DurationKey) > 0 {
+		durationKey = c.DurationKey
+	}
+	if len(c.LevelKey) > 0 {
+		levelKey = c.LevelKey
+	}
+	if len(c.SpanKey) > 0 {
+		spanKey = c.SpanKey
+	}
+	if len(c.TimestampKey) > 0 {
+		timestampKey = c.TimestampKey
+	}
+	if len(c.TraceKey) > 0 {
+		traceKey = c.TraceKey
+	}
+	if len(c.TruncatedKey) > 0 {
+		truncatedKey = c.TruncatedKey
+	}
+}
+
+func setupLogLevel(level string) {
+	switch level {
 	case levelDebug:
 		SetLevel(DebugLevel)
 	case levelInfo:
@@ -505,7 +557,7 @@ func shallLogStat() bool {
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeDebug(val any, fields ...LogField) {
-	getWriter().Debug(val, addCaller(fields...)...)
+	getWriter().Debug(val, mergeGlobalFields(addCaller(fields...))...)
 }
 
 // writeError writes v into the error log.
@@ -513,7 +565,7 @@ func writeDebug(val any, fields ...LogField) {
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeError(val any, fields ...LogField) {
-	getWriter().Error(val, addCaller(fields...)...)
+	getWriter().Error(val, mergeGlobalFields(addCaller(fields...))...)
 }
 
 // writeInfo writes v into info log.
@@ -521,7 +573,7 @@ func writeError(val any, fields ...LogField) {
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeInfo(val any, fields ...LogField) {
-	getWriter().Info(val, addCaller(fields...)...)
+	getWriter().Info(val, mergeGlobalFields(addCaller(fields...))...)
 }
 
 // writeSevere writes v into severe log.
@@ -537,7 +589,7 @@ func writeSevere(msg string) {
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeSlow(val any, fields ...LogField) {
-	getWriter().Slow(val, addCaller(fields...)...)
+	getWriter().Slow(val, mergeGlobalFields(addCaller(fields...))...)
 }
 
 // writeStack writes v into stack log.
@@ -553,5 +605,5 @@ func writeStack(msg string) {
 // If we check shallLog here, the fmt.Sprint might be called even if the log level is not enabled.
 // The caller should check shallLog before calling this function.
 func writeStat(msg string) {
-	getWriter().Stat(msg, addCaller()...)
+	getWriter().Stat(msg, mergeGlobalFields(addCaller())...)
 }

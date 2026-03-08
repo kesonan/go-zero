@@ -21,10 +21,11 @@ import (
 
 func TestDoRequest(t *testing.T) {
 	ztrace.StartAgent(ztrace.Config{
-		Name:     "go-zero-test",
-		Endpoint: "http://localhost:14268/api/traces",
-		Batcher:  "jaeger",
-		Sampler:  1.0,
+		Name:         "go-zero-test",
+		Endpoint:     "http://localhost:14268",
+		OtlpHttpPath: "/v1/traces",
+		Batcher:      "otlphttp",
+		Sampler:      1.0,
 	})
 	defer ztrace.StopAgent()
 
@@ -45,7 +46,7 @@ func TestDoRequest_NotFound(t *testing.T) {
 	defer svr.Close()
 	req, err := http.NewRequest(http.MethodPost, svr.URL, nil)
 	assert.Nil(t, err)
-	req.Header.Set(header.ContentType, header.JsonContentType)
+	req.Header.Set(header.ContentType, header.ContentTypeJson)
 	resp, err := DoRequest(req)
 	assert.Nil(t, err)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)

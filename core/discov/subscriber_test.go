@@ -171,10 +171,10 @@ func TestContainer(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				var changed bool
 				c := newContainer(exclusive)
-				c.addListener(func() {
+				c.AddListener(func() {
 					changed = true
 				})
-				assert.Nil(t, c.getValues())
+				assert.Nil(t, c.GetValues())
 				assert.False(t, changed)
 
 				for _, order := range test.do {
@@ -193,9 +193,9 @@ func TestContainer(t *testing.T) {
 
 				assert.True(t, changed)
 				assert.True(t, c.dirty.True())
-				assert.ElementsMatch(t, test.expect, c.getValues())
+				assert.ElementsMatch(t, test.expect, c.GetValues())
 				assert.False(t, c.dirty.True())
-				assert.ElementsMatch(t, test.expect, c.getValues())
+				assert.ElementsMatch(t, test.expect, c.GetValues())
 			})
 		}
 	}
@@ -204,12 +204,14 @@ func TestContainer(t *testing.T) {
 func TestSubscriber(t *testing.T) {
 	sub := new(Subscriber)
 	Exclusive()(sub)
-	sub.items = newContainer(sub.exclusive)
+	c := newContainer(sub.exclusive)
+	WithContainer(c)(sub)
+	sub.items = c
 	var count int32
 	sub.AddListener(func() {
 		atomic.AddInt32(&count, 1)
 	})
-	sub.items.notifyChange()
+	c.notifyChange()
 	assert.Empty(t, sub.Values())
 	assert.Equal(t, int32(1), atomic.LoadInt32(&count))
 }
@@ -224,4 +226,30 @@ func TestWithSubEtcdAccount(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, user, account.User)
 	assert.Equal(t, "bar", account.Pass)
+}
+
+func TestWithExactMatch(t *testing.T) {
+	sub := new(Subscriber)
+	WithExactMatch()(sub)
+	c := newContainer(sub.exclusive)
+	sub.items = c
+	var count int32
+	sub.AddListener(func() {
+		atomic.AddInt32(&count, 1)
+	})
+	c.notifyChange()
+	assert.Empty(t, sub.Values())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&count))
+}
+
+func TestSubscriberClose(t *testing.T) {
+	l := newContainer(false)
+	sub := &Subscriber{
+		endpoints: []string{"localhost:12379"},
+		key:       "foo",
+		items:     l,
+	}
+	assert.NotPanics(t, func() {
+		sub.Close()
+	})
 }

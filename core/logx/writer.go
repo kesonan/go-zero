@@ -10,27 +10,45 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	fatihcolor "github.com/fatih/color"
 	"github.com/zeromicro/go-zero/core/color"
+	"github.com/zeromicro/go-zero/core/errorx"
 )
 
 type (
+	// Writer is the interface for writing logs.
+	// It's designed to let users customize their own log writer,
+	// such as writing logs to a kafka, a database, or using third-party loggers.
 	Writer interface {
+		// Alert sends an alert message, if your writer implemented alerting functionality.
 		Alert(v any)
+		// Close closes the writer.
 		Close() error
+		// Debug logs a message at debug level.
 		Debug(v any, fields ...LogField)
+		// Error logs a message at error level.
 		Error(v any, fields ...LogField)
+		// Info logs a message at info level.
 		Info(v any, fields ...LogField)
+		// Severe logs a message at severe level.
 		Severe(v any)
+		// Slow logs a message at slow level.
 		Slow(v any, fields ...LogField)
+		// Stack logs a message at error level.
 		Stack(v any)
+		// Stat logs a message at stat level.
 		Stat(v any, fields ...LogField)
 	}
 
 	atomicWriter struct {
 		writer Writer
 		lock   sync.RWMutex
+	}
+
+	comboWriter struct {
+		writers []Writer
 	}
 
 	concreteWriter struct {
@@ -88,6 +106,62 @@ func (w *atomicWriter) Swap(v Writer) Writer {
 	return old
 }
 
+func (c comboWriter) Alert(v any) {
+	for _, w := range c.writers {
+		w.Alert(v)
+	}
+}
+
+func (c comboWriter) Close() error {
+	var be errorx.BatchError
+	for _, w := range c.writers {
+		be.Add(w.Close())
+	}
+	return be.Err()
+}
+
+func (c comboWriter) Debug(v any, fields ...LogField) {
+	for _, w := range c.writers {
+		w.Debug(v, fields...)
+	}
+}
+
+func (c comboWriter) Error(v any, fields ...LogField) {
+	for _, w := range c.writers {
+		w.Error(v, fields...)
+	}
+}
+
+func (c comboWriter) Info(v any, fields ...LogField) {
+	for _, w := range c.writers {
+		w.Info(v, fields...)
+	}
+}
+
+func (c comboWriter) Severe(v any) {
+	for _, w := range c.writers {
+		w.Severe(v)
+	}
+}
+
+func (c comboWriter) Slow(v any, fields ...LogField) {
+	for _, w := range c.writers {
+		w.Slow(v, fields...)
+	}
+}
+
+func (c comboWriter) Stack(v any) {
+	for _, w := range c.writers {
+		w.Stack(v)
+	}
+}
+
+func (c comboWriter) Stat(v any, fields ...LogField) {
+	for _, w := range c.writers {
+		w.Stat(v, fields...)
+	}
+}
+
 func newConsoleWriter() Writer {
 	outLog := newLogWriter(log.New(fatihcolor.Output, "", flags))
 	errLog := newLogWriter(log.New(fatihcolor.Error, "", flags))
@@ -138,7 +212,6 @@ func newFileWriter(c LogConf) (Writer, error) {
 	statFile := path.Join(c.Path, statFilename)
 
 	handleOptions(opts)
-	setupLogLevel(c)
 
 	if infoLog, err = createOutput(accessFile); err != nil {
 		return nil, err
@@ -263,20 +336,6 @@ func buildPlainFields(fields logEntry) []string {
 	return items
 }
 
-func combineGlobalFields(fields []LogField) []LogField {
-	globals := globalFields.Load()
-	if globals == nil {
-		return fields
-	}
-
-	gf := globals.([]LogField)
-	ret := make([]LogField, 0, len(gf)+len(fields))
-	ret = append(ret, gf...)
-	ret = append(ret, fields...)
-
-	return ret
-}
-
 func marshalJson(t interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
@@ -291,21 +350,40 @@ func marshalJson(t interface{}) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func mergeGlobalFields(fields []LogField) []LogField {
+	globals := globalFields.Load()
+	if globals == nil {
+		return fields
+	}
+
+	gf := globals.([]LogField)
+	ret := make([]LogField, 0, len(gf)+len(fields))
+	ret = append(ret, gf...)
+	ret = append(ret, fields...)
+
+	return ret
+}
+
 func output(writer io.Writer, level string, val any, fields ...LogField) {
-	// only truncate string content, don't know how to truncate the values of other types.
-	if v, ok := val.(string); ok {
+	switch v := val.(type) {
+	case string:
+		// only truncate string content, don't know how to truncate the values of other types.
 		maxLen := atomic.LoadUint32(&maxContentLength)
 		if maxLen > 0 && len(v) > int(maxLen) {
 			val = v[:maxLen]
 			fields = append(fields, truncatedField)
 		}
+	case Sensitive:
+		val = v.MaskSensitive()
 	}
 
-	fields = combineGlobalFields(fields)
 	// +3 for timestamp, level and content
 	entry := make(logEntry, len(fields)+3)
 	for _, field := range fields {
-		entry[field.Key] = field.Value
+		// mask sensitive data before processing types,
+		// in case field.Value is a sensitive type and also implemented fmt.Stringer.
+		mval := maskSensitive(field.Value)
+		entry[field.Key] = processFieldValue(mval)
 	}
 
 	switch atomic.LoadUint32(&encoding) {
@@ -320,12 +398,53 @@ func output(writer io.Writer, level string, val any, fields ...LogField) {
 	}
 }
 
+func processFieldValue(value any) any {
+	switch val := value.(type) {
+	case error:
+		return encodeError(val)
+	case []error:
+		var errs []string
+		for _, err := range val {
+			errs = append(errs, encodeError(err))
+		}
+		return errs
+	case time.Duration:
+		return fmt.Sprint(val)
+	case []time.Duration:
+		var durs []string
+		for _, dur := range val {
+			durs = append(durs, fmt.Sprint(dur))
+		}
+		return durs
+	case []time.Time:
+		var times []string
+		for _, t := range val {
+			times = append(times, fmt.Sprint(t))
+		}
+		return times
+	case json.Marshaler:
+		return val
+	case fmt.Stringer:
+		return encodeStringer(val)
+	case []fmt.Stringer:
+		var strs []string
+		for _, str := range val {
+			strs = append(strs, encodeStringer(str))
+		}
+		return strs
+	default:
+		return val
+	}
+}
+
 func wrapLevelWithColor(level string) string {
 	var colour color.Color
 	switch level {
 	case levelAlert:
 		colour = color.FgRed
 	case levelError:
+		colour = color.FgRed
+	case levelSevere:
 		colour = color.FgRed
 	case levelFatal:
 		colour = color.FgRed

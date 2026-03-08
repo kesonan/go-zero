@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/zeromicro/go-zero/core/jsonx"
 	"github.com/zeromicro/go-zero/core/stringx"
 )
 
@@ -202,6 +203,20 @@ func TestUnmarshalDuration(t *testing.T) {
 	}
 }
 
+func TestUnmarshalDurationUnexpectedError(t *testing.T) {
+	type inner struct {
+		Duration time.Duration `key:"duration"`
+	}
+	content := "{\"duration\": 1}"
+	var m = map[string]any{}
+	err := jsonx.Unmarshal([]byte(content), &m)
+	assert.NoError(t, err)
+	var in inner
+	err = UnmarshalKey(m, &in)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expect string")
+}
+
 func TestUnmarshalDurationDefault(t *testing.T) {
 	type inner struct {
 		Int      int           `key:"int"`
@@ -351,13 +366,28 @@ func TestUnmarshalIntSliceOfPtr(t *testing.T) {
 		assert.Error(t, UnmarshalKey(m, &in))
 	})
 
-	t.Run("int slice with nil", func(t *testing.T) {
+	t.Run("int slice with nil element", func(t *testing.T) {
 		type inner struct {
 			Ints []int `key:"ints"`
 		}
 
 		m := map[string]any{
 			"ints": []any{nil},
+		}
+
+		var in inner
+		if assert.NoError(t, UnmarshalKey(m, &in)) {
+			assert.Empty(t, in.Ints)
+		}
+	})
+
+	t.Run("int slice with nil", func(t *testing.T) {
+		type inner struct {
+			Ints []int `key:"ints"`
+		}
+
+		m := map[string]any{
+			"ints": []any(nil),
 		}
 
 		var in inner
@@ -1374,20 +1404,80 @@ func TestUnmarshalWithFloatPtr(t *testing.T) {
 }
 
 func TestUnmarshalIntSlice(t *testing.T) {
-	var v struct {
-		Ages  []int `key:"ages"`
-		Slice []int `key:"slice"`
-	}
-	m := map[string]any{
-		"ages":  []int{1, 2},
-		"slice": []any{},
-	}
+	t.Run("int slice from int", func(t *testing.T) {
+		var v struct {
+			Ages  []int `key:"ages"`
+			Slice []int `key:"slice"`
+		}
+		m := map[string]any{
+			"ages":  []int{1, 2},
+			"slice": []any{},
+		}
 
-	ast := assert.New(t)
-	if ast.NoError(UnmarshalKey(m, &v)) {
-		ast.ElementsMatch([]int{1, 2}, v.Ages)
-		ast.Equal([]int{}, v.Slice)
-	}
+		ast := assert.New(t)
+		if ast.NoError(UnmarshalKey(m, &v)) {
+			ast.ElementsMatch([]int{1, 2}, v.Ages)
+			ast.Equal([]int{}, v.Slice)
+		}
+	})
+
+	t.Run("int slice from one int", func(t *testing.T) {
+		var v struct {
+			Ages []int `key:"ages"`
+		}
+		m := map[string]any{
+			"ages": []int{2},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]int{2}, v.Ages)
+		}
+	})
+
+	t.Run("int slice from one int string", func(t *testing.T) {
+		var v struct {
+			Ages []int `key:"ages"`
+		}
+		m := map[string]any{
+			"ages": []string{"2"},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]int{2}, v.Ages)
+		}
+	})
+
+	t.Run("int slice from one json.Number", func(t *testing.T) {
+		var v struct {
+			Ages []int `key:"ages"`
+		}
+		m := map[string]any{
+			"ages": []json.Number{"2"},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]int{2}, v.Ages)
+		}
+	})
+
+	t.Run("int slice from one int strings", func(t *testing.T) {
+		var v struct {
+			Ages []int `key:"ages"`
+		}
+		m := map[string]any{
+			"ages": []string{"1,2"},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		ast.Error(unmarshaler.Unmarshal(m, &v))
+	})
 }
 
 func TestUnmarshalString(t *testing.T) {
@@ -1439,6 +1529,51 @@ func TestUnmarshalStringSliceFromString(t *testing.T) {
 			ast.Equal(2, len(v.Names))
 			ast.Equal("first", v.Names[0])
 			ast.Equal("second", v.Names[1])
+		}
+	})
+
+	t.Run("slice from empty string", func(t *testing.T) {
+		var v struct {
+			Names []string `key:"names"`
+		}
+		m := map[string]any{
+			"names": []string{""},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]string{""}, v.Names)
+		}
+	})
+
+	t.Run("slice from empty and valid string", func(t *testing.T) {
+		var v struct {
+			Names []string `key:"names"`
+		}
+		m := map[string]any{
+			"names": []string{","},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]string{","}, v.Names)
+		}
+	})
+
+	t.Run("slice from valid strings with comma", func(t *testing.T) {
+		var v struct {
+			Names []string `key:"names"`
+		}
+		m := map[string]any{
+			"names": []string{"aa,bb"},
+		}
+
+		ast := assert.New(t)
+		unmarshaler := NewUnmarshaler(defaultKeyName, WithFromArray())
+		if ast.NoError(unmarshaler.Unmarshal(m, &v)) {
+			ast.ElementsMatch([]string{"aa,bb"}, v.Names)
 		}
 	})
 
@@ -4544,6 +4679,23 @@ func TestUnmarshal_EnvInt(t *testing.T) {
 	}
 }
 
+func TestUnmarshal_EnvInt64(t *testing.T) {
+	type Value struct {
+		Age int64 `key:"age,env=TEST_NAME_INT64"`
+	}
+
+	const (
+		envName = "TEST_NAME_INT64"
+		envVal  = "88"
+	)
+	t.Setenv(envName, envVal)
+
+	var v Value
+	if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+		assert.Equal(t, int64(88), v.Age)
+	}
+}
+
 func TestUnmarshal_EnvIntOverwrite(t *testing.T) {
 	type Value struct {
 		Age int `key:"age,env=TEST_NAME_INT"`
@@ -4649,20 +4801,33 @@ func TestUnmarshal_EnvBoolBad(t *testing.T) {
 }
 
 func TestUnmarshal_EnvDuration(t *testing.T) {
-	type Value struct {
-		Duration time.Duration `key:"duration,env=TEST_NAME_DURATION"`
-	}
-
 	const (
 		envName = "TEST_NAME_DURATION"
 		envVal  = "1s"
 	)
 	t.Setenv(envName, envVal)
 
-	var v Value
-	if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
-		assert.Equal(t, time.Second, v.Duration)
-	}
+	t.Run("valid duration", func(t *testing.T) {
+		type Value struct {
+			Duration time.Duration `key:"duration,env=TEST_NAME_DURATION"`
+		}
+
+		var v Value
+		if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+			assert.Equal(t, time.Second, v.Duration)
+		}
+	})
+
+	t.Run("ptr of duration", func(t *testing.T) {
+		type Value struct {
+			Duration *time.Duration `key:"duration,env=TEST_NAME_DURATION"`
+		}
+
+		var v Value
+		if assert.NoError(t, UnmarshalKey(emptyMap, &v)) {
+			assert.Equal(t, time.Second, *v.Duration)
+		}
+	})
 }
 
 func TestUnmarshal_EnvDurationBadValue(t *testing.T) {
@@ -4761,14 +4926,28 @@ func TestUnmarshal_EnvWithOptionsWrongValueString(t *testing.T) {
 
 func TestUnmarshalJsonReaderMultiArray(t *testing.T) {
 	t.Run("reader multi array", func(t *testing.T) {
-		var res struct {
+		type testRes struct {
 			A string     `json:"a"`
 			B [][]string `json:"b"`
+			C []byte     `json:"c"`
 		}
-		payload := `{"a": "133", "b": [["add", "cccd"], ["eeee"]]}`
+
+		var res testRes
+		marshal := testRes{
+			A: "133",
+			B: [][]string{
+				{"add", "cccd"},
+				{"eeee"},
+			},
+			C: []byte("11122344wsss"),
+		}
+		bytes, err := jsonx.Marshal(marshal)
+		assert.NoError(t, err)
+		payload := string(bytes)
 		reader := strings.NewReader(payload)
 		if assert.NoError(t, UnmarshalJsonReader(reader, &res)) {
 			assert.Equal(t, 2, len(res.B))
+			assert.Equal(t, string(marshal.C), string(res.C))
 		}
 	})
 
@@ -5639,6 +5818,62 @@ func TestUnmarshalFromStringSliceForTypeMismatch(t *testing.T) {
 	}, &v))
 }
 
+func TestUnmarshalWithFromArray(t *testing.T) {
+	t.Run("array", func(t *testing.T) {
+		var v struct {
+			Value []string `key:"value"`
+		}
+		unmarshaler := NewUnmarshaler("key", WithFromArray())
+		if assert.NoError(t, unmarshaler.Unmarshal(map[string]any{
+			"value": []string{"foo", "bar"},
+		}, &v)) {
+			assert.ElementsMatch(t, []string{"foo", "bar"}, v.Value)
+		}
+	})
+
+	t.Run("not array", func(t *testing.T) {
+		var v struct {
+			Value string `key:"value"`
+		}
+		unmarshaler := NewUnmarshaler("key", WithFromArray())
+		if assert.NoError(t, unmarshaler.Unmarshal(map[string]any{
+			"value": []string{"foo"},
+		}, &v)) {
+			assert.Equal(t, "foo", v.Value)
+		}
+	})
+
+	t.Run("not array and empty", func(t *testing.T) {
+		var v struct {
+			Value string `key:"value"`
+		}
+		unmarshaler := NewUnmarshaler("key", WithFromArray())
+		if assert.NoError(t, unmarshaler.Unmarshal(map[string]any{
+			"value": []string{""},
+		}, &v)) {
+			assert.Empty(t, v.Value)
+		}
+	})
+
+	t.Run("not array and no value", func(t *testing.T) {
+		var v struct {
+			Value string `key:"value"`
+		}
+		unmarshaler := NewUnmarshaler("key", WithFromArray())
+		assert.Error(t, unmarshaler.Unmarshal(map[string]any{}, &v))
+	})
+
+	t.Run("not array and no value and optional", func(t *testing.T) {
+		var v struct {
+			Value string `key:"value,optional"`
+		}
+		unmarshaler := NewUnmarshaler("key", WithFromArray())
+		if assert.NoError(t, unmarshaler.Unmarshal(map[string]any{}, &v)) {
+			assert.Empty(t, v.Value)
+		}
+	})
+}
+
 func TestUnmarshalWithOpaqueKeys(t *testing.T) {
 	var v struct {
 		Opaque string `key:"opaque.key"`
@@ -5803,6 +6038,147 @@ func TestUnmarshal_Unmarshaler(t *testing.T) {
 			"name": "hello",
 		}, &v))
 		assert.Nil(t, v.Foo)
+	})
+
+	t.Run("json.Number", func(t *testing.T) {
+		v := struct {
+			Foo *mockUnmarshaler `json:"name"`
+		}{}
+		m := map[string]any{
+			"name": json.Number("123"),
+		}
+		assert.Error(t, UnmarshalJsonMap(m, &v))
+	})
+}
+
+func TestParseJsonStringValue(t *testing.T) {
+	t.Run("string", func(t *testing.T) {
+		type GoodsInfo struct {
+			Sku int64 `json:"sku,optional"`
+		}
+
+		type GetReq struct {
+			GoodsList []*GoodsInfo `json:"goods_list"`
+		}
+
+		input := map[string]any{"goods_list": "[{\"sku\":11},{\"sku\":22}]"}
+		var v GetReq
+		assert.NotPanics(t, func() {
+			assert.NoError(t, UnmarshalJsonMap(input, &v))
+			assert.Equal(t, 2, len(v.GoodsList))
+			assert.ElementsMatch(t, []int64{11, 22}, []int64{v.GoodsList[0].Sku, v.GoodsList[1].Sku})
+		})
+	})
+
+	t.Run("string with invalid type", func(t *testing.T) {
+		type GetReq struct {
+			GoodsList []*int `json:"goods_list"`
+		}
+
+		input := map[string]any{"goods_list": "[{\"sku\":11},{\"sku\":22}]"}
+		var v GetReq
+		assert.NotPanics(t, func() {
+			assert.Error(t, UnmarshalJsonMap(input, &v))
+		})
+	})
+}
+
+// issue #5033, string type
+func TestUnmarshalFromEnvString(t *testing.T) {
+	t.Setenv("STRING_ENV", "dev")
+
+	t.Run("by value", func(t *testing.T) {
+		type (
+			Env    string
+			Config struct {
+				Env Env `json:",env=STRING_ENV,default=prod"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env("dev"), c.Env)
+		}
+	})
+
+	t.Run("by ptr", func(t *testing.T) {
+		type (
+			Env    string
+			Config struct {
+				Env *Env `json:",env=STRING_ENV,default=prod"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env("dev"), *c.Env)
+		}
+	})
+}
+
+// issue #5033, bool type
+func TestUnmarshalFromEnvBool(t *testing.T) {
+	t.Setenv("BOOL_ENV", "true")
+
+	t.Run("by value", func(t *testing.T) {
+		type (
+			Env    bool
+			Config struct {
+				Env Env `json:",env=BOOL_ENV,default=false"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env(true), c.Env)
+		}
+	})
+
+	t.Run("by ptr", func(t *testing.T) {
+		type (
+			Env    bool
+			Config struct {
+				Env *Env `json:",env=BOOL_ENV,default=false"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env(true), *c.Env)
+		}
+	})
+}
+
+// issue #5033, customized int type
+func TestUnmarshalFromEnvInt(t *testing.T) {
+	t.Setenv("INT_ENV", "2")
+
+	t.Run("by value", func(t *testing.T) {
+		type (
+			Env    int
+			Config struct {
+				Env Env `json:",env=INT_ENV,default=0"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env(2), c.Env)
+		}
+	})
+
+	t.Run("by ptr", func(t *testing.T) {
+		type (
+			Env    int
+			Config struct {
+				Env *Env `json:",env=INT_ENV,default=0"`
+			}
+		)
+
+		var c Config
+		if assert.NoError(t, UnmarshalJsonMap(map[string]any{}, &c)) {
+			assert.Equal(t, Env(2), *c.Env)
+		}
 	})
 }
 

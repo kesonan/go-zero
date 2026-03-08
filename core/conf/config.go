@@ -85,7 +85,12 @@ func LoadFromJsonBytes(content []byte, v any) error {
 
 	lowerCaseKeyMap := toLowerCaseKeyMap(m, info)
 
-	return mapping.UnmarshalJsonMap(lowerCaseKeyMap, v, mapping.WithCanonicalKeyFunc(toLowerCase))
+	if err = mapping.UnmarshalJsonMap(lowerCaseKeyMap, v,
+		mapping.WithCanonicalKeyFunc(toLowerCase)); err != nil {
+		return err
+	}
+
+	return validate(v)
 }
 
 // LoadConfigFromJsonBytes loads config into v from content json bytes.
@@ -189,10 +194,10 @@ func buildFieldsInfo(tp reflect.Type, fullName string) (*fieldInfo, error) {
 	switch tp.Kind() {
 	case reflect.Struct:
 		return buildStructFieldsInfo(tp, fullName)
-	case reflect.Array, reflect.Slice:
+	case reflect.Array, reflect.Slice, reflect.Map:
 		return buildFieldsInfo(mapping.Deref(tp.Elem()), fullName)
 	case reflect.Chan, reflect.Func:
-		return nil, fmt.Errorf("unsupported type: %s", tp.Kind())
+		return nil, fmt.Errorf("unsupported type: %s, fullName: %s", tp.Kind(), fullName)
 	default:
 		return &fieldInfo{
 			children: make(map[string]*fieldInfo),
@@ -307,7 +312,7 @@ func toLowerCaseInterface(v any, info *fieldInfo) any {
 	case map[string]any:
 		return toLowerCaseKeyMap(vv, info)
 	case []any:
-		var arr []any
+		arr := make([]any, 0, len(vv))
 		for _, vvv := range vv {
 			arr = append(arr, toLowerCaseInterface(vvv, info))
 		}
@@ -332,6 +337,8 @@ func toLowerCaseKeyMap(m map[string]any, info *fieldInfo) map[string]any {
 			res[lk] = toLowerCaseInterface(v, ti)
 		} else if info.mapField != nil {
 			res[k] = toLowerCaseInterface(v, info.mapField)
+		} else if vv, ok := v.(map[string]any); ok {
+			res[k] = toLowerCaseKeyMap(vv, info)
 		} else {
 			res[k] = v
 		}
@@ -357,5 +364,5 @@ func getFullName(parent, child string) string {
 		return child
 	}
 
-	return strings.Join([]string{parent, child}, ".")
+	return parent + "." + child
 }

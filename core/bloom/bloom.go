@@ -40,7 +40,7 @@ type (
 	}
 )
 
-// New create a Filter, store is the backed redis, key is the key for the bloom filter,
+// New creates a Filter, store is the backed redis, key is the key for the bloom filter,
 // bits is how many bits will be used, maps is how many hashes for each addition.
 // best practices:
 // elements - means how many actual elements
@@ -105,7 +105,7 @@ func newRedisBitSet(store *redis.Redis, key string, bits uint) *redisBitSet {
 }
 
 func (r *redisBitSet) buildOffsetArgs(offsets []uint) ([]string, error) {
-	var args []string
+	args := make([]string, 0, len(offsets))
 
 	for _, offset := range offsets {
 		if offset >= r.bits {

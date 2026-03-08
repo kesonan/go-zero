@@ -1,8 +1,6 @@
 package fx
 
 import (
-	"io"
-	"log"
 	"math/rand"
 	"reflect"
 	"runtime"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/zeromicro/go-zero/core/logx/logtest"
 	"github.com/zeromicro/go-zero/core/stringx"
 	"go.uber.org/goleak"
 )
@@ -238,7 +237,7 @@ func TestLast(t *testing.T) {
 
 func TestMap(t *testing.T) {
 	runCheckedTest(t, func(t *testing.T) {
-		log.SetOutput(io.Discard)
+		logtest.Discard(t)
 
 		tests := []struct {
 			mapper MapFunc
@@ -398,16 +397,16 @@ func TestWalk(t *testing.T) {
 
 func TestStream_AnyMach(t *testing.T) {
 	runCheckedTest(t, func(t *testing.T) {
-		assetEqual(t, false, Just(1, 2, 3).AnyMach(func(item any) bool {
+		assetEqual(t, false, Just(1, 2, 3).AnyMatch(func(item any) bool {
 			return item.(int) == 4
 		}))
-		assetEqual(t, false, Just(1, 2, 3).AnyMach(func(item any) bool {
+		assetEqual(t, false, Just(1, 2, 3).AnyMatch(func(item any) bool {
 			return item.(int) == 0
 		}))
-		assetEqual(t, true, Just(1, 2, 3).AnyMach(func(item any) bool {
+		assetEqual(t, true, Just(1, 2, 3).AnyMatch(func(item any) bool {
 			return item.(int) == 2
 		}))
-		assetEqual(t, true, Just(1, 2, 3).AnyMach(func(item any) bool {
+		assetEqual(t, true, Just(1, 2, 3).AnyMatch(func(item any) bool {
 			return item.(int) == 2
 		}))
 	})
@@ -416,17 +415,17 @@ func TestStream_AnyMach(t *testing.T) {
 func TestStream_AllMach(t *testing.T) {
 	runCheckedTest(t, func(t *testing.T) {
 		assetEqual(
-			t, true, Just(1, 2, 3).AllMach(func(item any) bool {
+			t, true, Just(1, 2, 3).AllMatch(func(item any) bool {
 				return true
 			}),
 		)
 		assetEqual(
-			t, false, Just(1, 2, 3).AllMach(func(item any) bool {
+			t, false, Just(1, 2, 3).AllMatch(func(item any) bool {
 				return false
 			}),
 		)
 		assetEqual(
-			t, false, Just(1, 2, 3).AllMach(func(item any) bool {
+			t, false, Just(1, 2, 3).AllMatch(func(item any) bool {
 				return item.(int) == 1
 			}),
 		)

@@ -18,8 +18,6 @@ import (
 )
 
 const (
-	dateFormat      = "2006-01-02"
-	fileTimeFormat  = time.RFC3339
 	hoursPerDay     = 24
 	bufferSize      = 100
 	defaultDirMode  = 0o755
@@ -28,8 +26,12 @@ const (
 	megaBytes       = 1 << 20
 )
 
-// ErrLogFileClosed is an error that indicates the log file is already closed.
-var ErrLogFileClosed = errors.New("error: log file closed")
+var (
+	// ErrLogFileClosed is an error that indicates the log file is already closed.
+	ErrLogFileClosed = errors.New("error: log file closed")
+
+	fileTimeFormat = time.RFC3339
+)
 
 type (
 	// A RotateRule interface is used to define the log rotating rules.
@@ -64,7 +66,7 @@ type (
 		gzip        bool
 	}
 
-	// SizeLimitRotateRule a rotation rule that make the log file rotated base on size
+	// SizeLimitRotateRule a rotation rule that makes the log file rotated based on size
 	SizeLimitRotateRule struct {
 		DailyRotateRule
 		maxSize    int64
@@ -113,7 +115,7 @@ func (r *DailyRotateRule) OutdatedFiles() []string {
 	}
 
 	var buf strings.Builder
-	boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay*r.days)).Format(dateFormat)
+	boundary := time.Now().Add(-time.Hour * time.Duration(hoursPerDay*r.days)).Format(time.DateOnly)
 	buf.WriteString(r.filename)
 	buf.WriteString(r.delimiter)
 	buf.WriteString(boundary)
@@ -209,7 +211,7 @@ func (r *SizeLimitRotateRule) OutdatedFiles() []string {
 		}
 	}
 
-	var result []string
+	result := make([]string, 0, len(outdated))
 	for k := range outdated {
 		result = append(result, k)
 	}
@@ -422,7 +424,7 @@ func compressLogFile(file string) {
 }
 
 func getNowDate() string {
-	return time.Now().Format(dateFormat)
+	return time.Now().Format(time.DateOnly)
 }
 
 func getNowDateInRFC3339Format() string {

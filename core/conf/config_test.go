@@ -1,6 +1,7 @@
 package conf
 
 import (
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -40,9 +41,8 @@ func TestConfigJson(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test, func(t *testing.T) {
-			tmpfile, err := createTempFile(test, text)
+			tmpfile, err := createTempFile(t, test, text)
 			assert.Nil(t, err)
-			defer os.Remove(tmpfile)
 
 			var val struct {
 				A string `json:"a"`
@@ -82,9 +82,8 @@ c = "${FOO}"
 d = "abcd!@#$112"
 `
 	t.Setenv("FOO", "2")
-	tmpfile, err := createTempFile(".toml", text)
+	tmpfile, err := createTempFile(t, ".toml", text)
 	assert.Nil(t, err)
-	defer os.Remove(tmpfile)
 
 	var val struct {
 		A string `json:"a"`
@@ -105,9 +104,8 @@ b = 1
 c = "FOO"
 d = "abcd"
 `
-	tmpfile, err := createTempFile(".toml", text)
+	tmpfile, err := createTempFile(t, ".toml", text)
 	assert.Nil(t, err)
-	defer os.Remove(tmpfile)
 
 	var val struct {
 		A string `json:"a"`
@@ -127,9 +125,8 @@ func TestConfigWithLower(t *testing.T) {
 	text := `a = "foo"
 b = 1
 `
-	tmpfile, err := createTempFile(".toml", text)
+	tmpfile, err := createTempFile(t, ".toml", text)
 	assert.Nil(t, err)
-	defer os.Remove(tmpfile)
 
 	var val struct {
 		A string `json:"a"`
@@ -207,9 +204,8 @@ c = "${FOO}"
 d = "abcd!@#112"
 `
 	t.Setenv("FOO", "2")
-	tmpfile, err := createTempFile(".toml", text)
+	tmpfile, err := createTempFile(t, ".toml", text)
 	assert.Nil(t, err)
-	defer os.Remove(tmpfile)
 
 	var val struct {
 		A string `json:"a"`
@@ -241,9 +237,8 @@ func TestConfigJsonEnv(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test, func(t *testing.T) {
-			tmpfile, err := createTempFile(test, text)
+			tmpfile, err := createTempFile(t, test, text)
 			assert.Nil(t, err)
-			defer os.Remove(tmpfile)
 
 			var val struct {
 				A string `json:"a"`
@@ -1192,11 +1187,67 @@ Email = "bar"`)
 			assert.Len(t, c.Value, 2)
 		}
 	})
+
+	t.Run("multi layer map", func(t *testing.T) {
+		type Value struct {
+			User struct {
+				Name string
+			}
+		}
+
+		type Config struct {
+			Value map[string]map[string]Value
+		}
+
+		var input = []byte(`
+[Value.first.User1.User]
+Name = "foo"
+[Value.second.User2.User]
+Name = "bar"
+`)
+		var c Config
+		if assert.NoError(t, LoadFromTomlBytes(input, &c)) {
+			assert.Len(t, c.Value, 2)
+		}
+	})
+}
+
+func Test_LoadBadConfig(t *testing.T) {
+	type Config struct {
+		Name string `json:"name,options=foo|bar"`
+	}
+
+	file, err := createTempFile(t, ".json", `{"name": "baz"}`)
+	assert.NoError(t, err)
+
+	var c Config
+	err = Load(file, &c)
+	assert.Error(t, err)
 }
 
 func Test_getFullName(t *testing.T) {
 	assert.Equal(t, "a.b", getFullName("a", "b"))
 	assert.Equal(t, "a", getFullName("", "a"))
+}
+
+func TestValidate(t *testing.T) {
+	t.Run("normal config", func(t *testing.T) {
+		var c mockConfig
+		err := LoadFromJsonBytes([]byte(`{"val": "hello", "number": 8}`), &c)
+		assert.NoError(t, err)
+	})
+
+	t.Run("error no int", func(t *testing.T) {
+		var c mockConfig
+		err := LoadFromJsonBytes([]byte(`{"val": "hello"}`), &c)
+		assert.Error(t, err)
+	})
+
+	t.Run("error no string", func(t *testing.T) {
+		var c mockConfig
+		err := LoadFromJsonBytes([]byte(`{"number": 8}`), &c)
+		assert.Error(t, err)
+	})
 }
 
 func Test_buildFieldsInfo(t *testing.T) {
@@ -1288,13 +1339,13 @@ func Test_buildFieldsInfo(t *testing.T) {
 	}
 }
 
-func createTempFile(ext, text string) (string, error) {
+func createTempFile(t *testing.T, ext, text string) (string, error) {
 	tmpFile, err := os.CreateTemp(os.TempDir(), hash.Md5Hex([]byte(text))+"*"+ext)
 	if err != nil {
 		return "", err
 	}
 
-	if err := os.WriteFile(tmpFile.Name(), []byte(text), os.ModeTemporary); err != nil {
+	if err = os.WriteFile(tmpFile.Name(), []byte(text), os.ModeTemporary); err != nil {
 		return "", err
 	}
 
@@ -1303,5 +1354,265 @@ func createTempFile(ext, text string) (string, error) {
 		return "", err
 	}
 
+	t.Cleanup(func() {
+		_ = os.Remove(filename)
+	})
+
 	return filename, nil
+}
+
+type mockConfig struct {
+	Val    string
+	Number int
+}
+
+func (m mockConfig) Validate() error {
+	if len(m.Val) == 0 {
+		return errors.New("val is empty")
+	}
+
+	if m.Number == 0 {
+		return errors.New("number is zero")
+	}
+
+	return nil
+}
+
+func TestGetFullName(t *testing.T) {
+	tests := []struct {
+		parent string
+		child  string
+		want   string
+	}{
+		{"", "child", "child"},
+		{"parent", "child", "parent.child"},
+		{"a.b", "c", "a.b.c"},
+		{"root", "nested.field", "root.nested.field"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.parent+"."+tt.child, func(t *testing.T) {
+			got := getFullName(tt.parent, tt.child)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// validatorConfig is a test config that implements Validate() for testing validation behavior
+type validatorConfig struct {
+	Value int `json:"value"`
+}
+
+func (v *validatorConfig) Validate() error {
+	if v.Value < 10 {
+		return errors.New("value must be >= 10")
+	}
+	return nil
+}
+
+// TestLoadValidation_WithoutEnv tests that validation is called correctly in normal loading path
+func TestLoadValidation_WithoutEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		extension string
+		content   string
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:      "json valid value",
+			extension: ".json",
+			content:   `{"value": 15}`,
+			wantErr:   false,
+		},
+		{
+			name:      "json invalid value",
+			extension: ".json",
+			content:   `{"value": 5}`,
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+		{
+			name:      "yaml valid value",
+			extension: ".yaml",
+			content:   "value: 20\n",
+			wantErr:   false,
+		},
+		{
+			name:      "yaml invalid value",
+			extension: ".yaml",
+			content:   "value: 3\n",
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+		{
+			name:      "toml valid value",
+			extension: ".toml",
+			content:   "value = 100\n",
+			wantErr:   false,
+		},
+		{
+			name:      "toml invalid value",
+			extension: ".toml",
+			content:   "value = 1\n",
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpfile, err := createTempFile(t, tt.extension, tt.content)
+			assert.Nil(t, err)
+
+			var cfg validatorConfig
+			err = Load(tmpfile, &cfg)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestLoadValidation_WithEnv tests that validation is called correctly with UseEnv() option
+func TestLoadValidation_WithEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		extension string
+		content   string
+		envValue  string
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:      "json valid value with env",
+			extension: ".json",
+			content:   `{"value": ${TEST_VALUE}}`,
+			envValue:  "25",
+			wantErr:   false,
+		},
+		{
+			name:      "json invalid value with env",
+			extension: ".json",
+			content:   `{"value": ${TEST_VALUE}}`,
+			envValue:  "7",
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+		{
+			name:      "yaml valid value with env",
+			extension: ".yaml",
+			content:   "value: ${TEST_VALUE}\n",
+			envValue:  "50",
+			wantErr:   false,
+		},
+		{
+			name:      "yaml invalid value with env",
+			extension: ".yaml",
+			content:   "value: ${TEST_VALUE}\n",
+			envValue:  "2",
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+		{
+			name:      "toml valid value with env",
+			extension: ".toml",
+			content:   "value = ${TEST_VALUE}\n",
+			envValue:  "99",
+			wantErr:   false,
+		},
+		{
+			name:      "toml invalid value with env",
+			extension: ".toml",
+			content:   "value = ${TEST_VALUE}\n",
+			envValue:  "8",
+			wantErr:   true,
+			errMsg:    "value must be >= 10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_VALUE", tt.envValue)
+
+			tmpfile, err := createTempFile(t, tt.extension, tt.content)
+			assert.Nil(t, err)
+
+			var cfg validatorConfig
+			err = Load(tmpfile, &cfg, UseEnv())
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestLoadValidation_Consistency verifies validation behavior is consistent between paths
+func TestLoadValidation_Consistency(t *testing.T) {
+	// Test that both paths (with and without UseEnv) produce the same validation results
+	const validValue = 15
+
+	formats := []struct {
+		ext     string
+		invalid string
+		valid   string
+	}{
+		{".json", `{"value": 5}`, `{"value": 15}`},
+		{".yaml", "value: 5\n", "value: 15\n"},
+		{".toml", "value = 5\n", "value = 15\n"},
+	}
+
+	for _, format := range formats {
+		t.Run("invalid_"+format.ext, func(t *testing.T) {
+			// Test without UseEnv()
+			tmpfile1, err := createTempFile(t, format.ext, format.invalid)
+			assert.Nil(t, err)
+
+			var cfg1 validatorConfig
+			err1 := Load(tmpfile1, &cfg1)
+
+			// Test with UseEnv()
+			tmpfile2, err := createTempFile(t, format.ext, format.invalid)
+			assert.Nil(t, err)
+
+			var cfg2 validatorConfig
+			err2 := Load(tmpfile2, &cfg2, UseEnv())
+
+			// Both should fail validation
+			assert.Error(t, err1, "validation should fail without UseEnv()")
+			assert.Error(t, err2, "validation should fail with UseEnv()")
+			assert.Contains(t, err1.Error(), "value must be >= 10")
+			assert.Contains(t, err2.Error(), "value must be >= 10")
+		})
+
+		t.Run("valid_"+format.ext, func(t *testing.T) {
+			// Test without UseEnv()
+			tmpfile1, err := createTempFile(t, format.ext, format.valid)
+			assert.Nil(t, err)
+
+			var cfg1 validatorConfig
+			err1 := Load(tmpfile1, &cfg1)
+
+			// Test with UseEnv()
+			tmpfile2, err := createTempFile(t, format.ext, format.valid)
+			assert.Nil(t, err)
+
+			var cfg2 validatorConfig
+			err2 := Load(tmpfile2, &cfg2, UseEnv())
+
+			// Both should pass validation
+			assert.NoError(t, err1, "validation should pass without UseEnv()")
+			assert.NoError(t, err2, "validation should pass with UseEnv()")
+			assert.Equal(t, validValue, cfg1.Value)
+			assert.Equal(t, validValue, cfg2.Value)
+		})
+	}
 }

@@ -59,42 +59,85 @@ func genFile(c fileGenConfig) error {
 
 func writeProperty(writer io.Writer, name, tag, comment string, tp spec.Type, indent int) error {
 	util.WriteIndent(writer, indent)
-	var err error
+	var (
+		err            error
+		isNestedStruct bool
+	)
+	structType, ok := tp.(spec.NestedStruct)
+	if ok {
+		isNestedStruct = true
+	}
 	if len(comment) > 0 {
 		comment = strings.TrimPrefix(comment, "//")
 		comment = "//" + comment
-		_, err = fmt.Fprintf(writer, "%s %s %s %s\n", strings.Title(name), tp.Name(), tag, comment)
-	} else {
-		_, err = fmt.Fprintf(writer, "%s %s %s\n", strings.Title(name), tp.Name(), tag)
 	}
 
-	return err
+	if isNestedStruct {
+		_, err = fmt.Fprintf(writer, "%s struct {\n", strings.Title(name))
+		if err != nil {
+			return err
+		}
+
+		if err := writeMember(writer, structType.Members); err != nil {
+			return err
+		}
+
+		_, err := fmt.Fprintf(writer, "} %s", tag)
+		if err != nil {
+			return err
+		}
+
+		if len(comment) > 0 {
+			_, err = fmt.Fprintf(writer, " %s", comment)
+			if err != nil {
+				return err
+			}
+		}
+		_, err = fmt.Fprint(writer, "\n")
+		if err != nil {
+			return err
+		}
+	} else {
+		if len(comment) > 0 {
+			_, err = fmt.Fprintf(writer, "%s %s %s %s\n", strings.Title(name), tp.Name(), tag, comment)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = fmt.Fprintf(writer, "%s %s %s\n", strings.Title(name), tp.Name(), tag)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func getAuths(api *spec.ApiSpec) []string {
-	authNames := collection.NewSet()
+	authNames := collection.NewSet[string]()
 	for _, g := range api.Service.Groups {
 		jwt := g.GetAnnotation("jwt")
 		if len(jwt) > 0 {
 			authNames.Add(jwt)
 		}
 	}
-	return authNames.KeysStr()
+	return authNames.Keys()
 }
 
 func getJwtTrans(api *spec.ApiSpec) []string {
-	jwtTransList := collection.NewSet()
+	jwtTransList := collection.NewSet[string]()
 	for _, g := range api.Service.Groups {
 		jt := g.GetAnnotation(jwtTransKey)
 		if len(jt) > 0 {
 			jwtTransList.Add(jt)
 		}
 	}
-	return jwtTransList.KeysStr()
+	return jwtTransList.Keys()
 }
 
 func getMiddleware(api *spec.ApiSpec) []string {
-	result := collection.NewSet()
+	result := collection.NewSet[string]()
 	for _, g := range api.Service.Groups {
 		middleware := g.GetAnnotation("middleware")
 		if len(middleware) > 0 {
@@ -104,7 +147,7 @@ func getMiddleware(api *spec.ApiSpec) []string {
 		}
 	}
 
-	return result.KeysStr()
+	return result.Keys()
 }
 
 func responseGoTypeName(r spec.Route, pkg ...string) string {

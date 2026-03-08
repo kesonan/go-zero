@@ -43,10 +43,11 @@ func TestLogDuration(t *testing.T) {
 	assert.True(t, len(addrs) > 0)
 
 	tests := []struct {
-		name     string
-		ctx      context.Context
-		req      any
-		duration time.Duration
+		name              string
+		ctx               context.Context
+		req               any
+		duration          time.Duration
+		durationThreshold time.Duration
 	}{
 		{
 			name: "normal",
@@ -59,10 +60,11 @@ func TestLogDuration(t *testing.T) {
 			req:  make(chan lang.PlaceholderType), // not marshalable
 		},
 		{
-			name:     "timeout",
-			ctx:      context.Background(),
-			req:      "foo",
-			duration: time.Second,
+			name:              "timeout",
+			ctx:               context.Background(),
+			req:               "foo",
+			duration:          time.Second,
+			durationThreshold: time.Millisecond * 500,
 		},
 		{
 			name: "timeout",
@@ -86,7 +88,7 @@ func TestLogDuration(t *testing.T) {
 
 			assert.NotPanics(t, func() {
 				logDuration(test.ctx, "foo", test.req, test.duration,
-					collection.NewSet(), 0)
+					collection.NewSet[string](), test.durationThreshold)
 			})
 		})
 	}
@@ -98,10 +100,11 @@ func TestLogDurationWithoutContent(t *testing.T) {
 	assert.True(t, len(addrs) > 0)
 
 	tests := []struct {
-		name     string
-		ctx      context.Context
-		req      any
-		duration time.Duration
+		name              string
+		ctx               context.Context
+		req               any
+		duration          time.Duration
+		durationThreshold time.Duration
 	}{
 		{
 			name: "normal",
@@ -114,10 +117,11 @@ func TestLogDurationWithoutContent(t *testing.T) {
 			req:  make(chan lang.PlaceholderType), // not marshalable
 		},
 		{
-			name:     "timeout",
-			ctx:      context.Background(),
-			req:      "foo",
-			duration: time.Second,
+			name:              "timeout",
+			ctx:               context.Background(),
+			req:               "foo",
+			duration:          time.Second,
+			durationThreshold: time.Millisecond * 500,
 		},
 		{
 			name: "timeout",
@@ -146,7 +150,7 @@ func TestLogDurationWithoutContent(t *testing.T) {
 
 			assert.NotPanics(t, func() {
 				logDuration(test.ctx, "foo", test.req, test.duration,
-					collection.NewSet(), 0)
+					collection.NewSet[string](), test.durationThreshold)
 			})
 		})
 	}
@@ -202,9 +206,10 @@ func Test_shouldLogContent(t *testing.T) {
 			t.Cleanup(func() {
 				ignoreContentMethods = sync.Map{}
 			})
-			set := collection.NewSet()
-			set.AddStr(tt.args.staticNotLoggingContentMethods...)
-			assert.Equalf(t, tt.want, shouldLogContent(tt.args.method, set), "shouldLogContent(%v, %v)", tt.args.method, tt.args.staticNotLoggingContentMethods)
+			set := collection.NewSet[string]()
+			set.Add(tt.args.staticNotLoggingContentMethods...)
+			assert.Equalf(t, tt.want, shouldLogContent(tt.args.method, set),
+				"shouldLogContent(%v, %v)", tt.args.method, tt.args.staticNotLoggingContentMethods)
 		})
 	}
 }
@@ -247,6 +252,15 @@ func Test_isSlow(t *testing.T) {
 				SetSlowThreshold(time.Millisecond * 100)
 			},
 		},
+		{
+			"config_priority_fix",
+			args{
+				duration:            time.Millisecond * 600,
+				staticSlowThreshold: time.Millisecond * 1000,
+			},
+			false,
+			nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -257,7 +271,8 @@ func Test_isSlow(t *testing.T) {
 			t.Cleanup(func() {
 				slowThreshold = syncx.ForAtomicDuration(defaultSlowThreshold)
 			})
-			assert.Equalf(t, tt.want, isSlow(tt.args.duration, tt.args.staticSlowThreshold), "isSlow(%v, %v)", tt.args.duration, tt.args.staticSlowThreshold)
+			assert.Equalf(t, tt.want, isSlow(tt.args.duration, tt.args.staticSlowThreshold),
+				"isSlow(%v, %v)", tt.args.duration, tt.args.staticSlowThreshold)
 		})
 	}
 }

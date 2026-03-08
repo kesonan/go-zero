@@ -2,8 +2,10 @@ package rest
 
 import (
 	"crypto/tls"
+	"embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +20,13 @@ import (
 	"github.com/zeromicro/go-zero/rest/chain"
 	"github.com/zeromicro/go-zero/rest/httpx"
 	"github.com/zeromicro/go-zero/rest/internal/cors"
+	"github.com/zeromicro/go-zero/rest/internal/header"
 	"github.com/zeromicro/go-zero/rest/router"
+)
+
+const (
+	exampleContent = "example content"
+	sampleContent  = "sample content"
 )
 
 func TestNewServer(t *testing.T) {
@@ -84,7 +92,7 @@ Port: 0
 			Path:    "/",
 			Handler: nil,
 		}, WithJwt("thesecret"), WithSignature(SignatureConf{}),
-			WithJwtTransition("preivous", "thenewone"))
+			WithJwtTransition("previous", "thenewone"))
 
 		func() {
 			defer func() {
@@ -182,6 +190,56 @@ func TestWithMiddleware(t *testing.T) {
 		"kevin": "2017",
 		"wan":   "2020",
 	}, m)
+}
+
+func TestWithFileServerMiddleware(t *testing.T) {
+	tests := []struct {
+		name            string
+		path            string
+		dir             string
+		requestPath     string
+		expectedStatus  int
+		expectedContent string
+	}{
+		{
+			name:            "Serve static file",
+			path:            "/assets/",
+			dir:             "./testdata",
+			requestPath:     "/assets/example.txt",
+			expectedStatus:  http.StatusOK,
+			expectedContent: exampleContent,
+		},
+		{
+			name:           "Pass through non-matching path",
+			path:           "/static/",
+			dir:            "./testdata",
+			requestPath:    "/other/path",
+			expectedStatus: http.StatusNotFound,
+		},
+		{
+			name:            "Directory with trailing slash",
+			path:            "/static",
+			dir:             "testdata",
+			requestPath:     "/static/sample.txt",
+			expectedStatus:  http.StatusOK,
+			expectedContent: sampleContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := MustNewServer(RestConf{}, WithFileServer(tt.path, http.Dir(tt.dir)))
+			req := httptest.NewRequest(http.MethodGet, tt.requestPath, nil)
+			rr := httptest.NewRecorder()
+
+			serve(server, rr, req)
+
+			assert.Equal(t, tt.expectedStatus, rr.Code)
+			if len(tt.expectedContent) > 0 {
+				assert.Equal(t, tt.expectedContent, rr.Body.String())
+			}
+		})
+	}
 }
 
 func TestMultiMiddlewares(t *testing.T) {
@@ -287,7 +345,7 @@ func TestWithPriority(t *testing.T) {
 func TestWithTimeout(t *testing.T) {
 	var fr featuredRoutes
 	WithTimeout(time.Hour)(&fr)
-	assert.Equal(t, time.Hour, fr.timeout)
+	assert.Equal(t, time.Hour, *fr.timeout)
 }
 
 func TestWithTLSConfig(t *testing.T) {
@@ -361,6 +419,64 @@ Port: 54321
 		w.WriteHeader(http.StatusOK)
 	}, "local")
 	opt(svr)
+}
+
+func TestWithCorsHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers []string
+	}{
+		{
+			name:    "single header",
+			headers: []string{"UserHeader"},
+		},
+		{
+			name:    "multiple headers",
+			headers: []string{"UserHeader", "X-Requested-With"},
+		},
+		{
+			name:    "no headers",
+			headers: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const configYaml = `
+Name: foo
+Port: 54321
+`
+			var cnf RestConf
+			assert.Nil(t, conf.LoadFromYamlBytes([]byte(configYaml), &cnf))
+			rt := router.NewRouter()
+			svr, err := NewServer(cnf, WithRouter(rt))
+			assert.Nil(t, err)
+			defer svr.Stop()
+			option := WithCorsHeaders(tt.headers...)
+			option(svr)
+
+			// Assuming newCorsRouter sets headers correctly,
+			// we would need to verify the behavior here. Since we don't have
+			// direct access to headers, we'll mock newCorsRouter to capture it.
+			w := httptest.NewRecorder()
+			serve(svr, w, httptest.NewRequest(http.MethodOptions, "/", nil))
+
+			vals := w.Header().Values("Access-Control-Allow-Headers")
+			respHeaders := make(map[string]struct{})
+			for _, header := range vals {
+				headers := strings.Split(header, ", ")
+				for _, h := range headers {
+					if len(h) > 0 {
+						respHeaders[h] = struct{}{}
+					}
+				}
+			}
+			for _, h := range tt.headers {
+				_, ok := respHeaders[h]
+				assert.Truef(t, ok, "expected header %s not found", h)
+			}
+		})
+	}
 }
 
 func TestServer_PrintRoutes(t *testing.T) {
@@ -633,8 +749,76 @@ Port: 54321
 		t.Run(test.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			req, _ := http.NewRequest("GET", test.path, nil)
-			svr.ServeHTTP(w, req)
+			serve(svr, w, req)
 			assert.Equal(t, test.code, w.Code)
 		})
 	}
+}
+
+func TestServerEventStream(t *testing.T) {
+	server := MustNewServer(RestConf{})
+	server.AddRoutes([]Route{
+		{
+			Method: http.MethodGet,
+			Path:   "/foo",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("foo"))
+			},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/bar",
+			Handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("bar"))
+			},
+		},
+	}, WithSSE())
+
+	check := func(val string) {
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("/%s", val), http.NoBody)
+		assert.Nil(t, err)
+		rr := httptest.NewRecorder()
+		serve(server, rr, req)
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, header.ContentTypeEventStream, rr.Header().Get(header.ContentType))
+		assert.Equal(t, header.CacheControlNoCache, rr.Header().Get(header.CacheControl))
+		assert.Equal(t, header.ConnectionKeepAlive, rr.Header().Get(header.Connection))
+		assert.Equal(t, val, rr.Body.String())
+	}
+	check("foo")
+	check("bar")
+}
+
+//go:embed testdata
+var content embed.FS
+
+func TestServerEmbedFileSystem(t *testing.T) {
+	filesys, err := fs.Sub(content, "testdata")
+	assert.NoError(t, err)
+
+	server := MustNewServer(RestConf{}, WithFileServer("/assets", http.FS(filesys)))
+	req, err := http.NewRequest(http.MethodGet, "/assets/sample.txt", http.NoBody)
+	assert.Nil(t, err)
+	rr := httptest.NewRecorder()
+	serve(server, rr, req)
+	assert.Equal(t, sampleContent, rr.Body.String())
+}
+
+// serve is for test purpose, allow developer to do a unit test with
+// all defined routes without starting an HTTP Server.
+//
+// For example:
+//
+//	server := MustNewServer(...)
+//	server.addRoute(...) // router a
+//	server.addRoute(...) // router b
+//	server.addRoute(...) // router c
+//
+//	r, _ := http.NewRequest(...)
+//	w := httptest.NewRecorder(...)
+//	serve(server, w, r)
+//	// verify the response
+func serve(s *Server, w http.ResponseWriter, r *http.Request) {
+	_ = s.build()
+	s.serve(w, r)
 }
